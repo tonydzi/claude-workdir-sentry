@@ -1,0 +1,11 @@
+{
+  "_readme": "Machine name (COMPUTERNAME / hostname, upper-cased on lookup) -> canonical Claude Code project dir. Machines not listed = sentry stays silent. always_ok_prefixes = intentional non-canonical cwds that must NOT warn (agent worktrees, scratchpads, a notes vault).",
+  "nodes": {
+    "MY-DESKTOP": "D:\\projects\\main-workspace",
+    "MY-MACBOOK": "/Users/me/projects/main-workspace"
+  },
+  "always_ok_prefixes": [
+    "C:\\Users\\me\\.claude\\worktrees",
+    "C:\\Users\\me\\AppData\\Local\\Temp\\claude"
+  ]
+}
