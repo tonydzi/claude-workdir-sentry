@@ -1,34 +1,47 @@
 #!/usr/bin/env python3
-"""workdir_sentry.py - Claude Code SessionStart hook: warn when a session starts
-outside this machine's canonical project directory.
+"""workdir_sentry.py — Claude Code SessionStart hook: one warning line when a
+session starts outside this machine's canonical project directory.
 
-WHY: Claude Code keys project memory (auto-memory), session history, and the
-project CLAUDE.md to the working directory the session starts in. Start in the
-wrong folder (home dir, System32 via an elevated shell, a synced copy of another
-machine's folder) and the session silently loads the WRONG memory - or none.
-Measured on one long-running workstation: 4370 sessions had started in $HOME and
-2420 in C:\\Windows\\System32, vs 1921 in the actual project folder - more than
-half of all sessions ran without their project context and nobody noticed.
+WHY THIS EXISTS
+    Claude Code keys project memory, session history and CLAUDE.md to the
+    directory a session STARTS in. Start in the wrong folder (your home dir,
+    System32 via an elevated shell, a synced copy of another machine's
+    project) and the session silently loads the wrong — usually empty —
+    context. Nothing errors. Nothing warns. Claude just gets amnesia.
 
-INSTALL:
-  1. Save this file, e.g. to ~/.claude/hooks/workdir_sentry.py
-  2. Create ~/.claude/workdir_homes.json (see workdir_homes.example.json):
-     maps each machine name to its canonical project dir, plus optional
-     always-ok prefixes (worktrees, scratchpads, your vault...).
-  3. Register a SessionStart hook in ~/.claude/settings.json:
-       "hooks": { "SessionStart": [ { "hooks": [ { "type": "command",
-         "command": "python3 ~/.claude/hooks/workdir_sentry.py", "timeout": 10 } ] } ] }
-     (Windows: "python %USERPROFILE%\\.claude\\hooks\\workdir_sentry.py")
+    Measured on one long-running workstation: 4370 sessions had started in
+    $HOME and 2420 in System32, vs 1921 in the actual project folder. More
+    than half of all sessions ran context-less, unnoticed, for months.
 
-BEHAVIOR: prints ONE warning line (which lands in the model's context) when the
-cwd is foreign; stays silent when the cwd is the canonical dir, an allowed
-prefix, or the machine is not listed. Fail-open: any error = silence, a session
-start is never blocked. A PowerShell 5.1 pipe prepends a UTF-8 BOM to stdin -
-that is why the json.loads input is BOM-stripped; keep that if you edit.
+WHAT IT DOES
+    At session start it compares the session's cwd with the canonical
+    project dir you declared for this machine in ~/.claude/workdir_homes.json.
+    Mismatch -> it prints ONE line, which Claude Code feeds into the model's
+    context, so the model itself knows it's homeless and says so on turn one.
+    Match / allowed prefix / unlisted machine -> silence (a healthy watchdog
+    is a quiet watchdog).
 
-Companion tip: also fix the ENTRY, not just the alarm - point your terminal's
-default start directory at the project (Windows Terminal:
-profiles.defaults.startingDirectory in its settings.json).
+SAFETY CONTRACT (read this before adding to your hook chain)
+    * fail-open: ANY error -> print nothing, exit 0. A sentry must never
+      block or slow a session start.
+    * zero dependencies: stdlib only, one file.
+    * BOM-hardened: a PowerShell 5.1 pipe prepends U+FEFF to stdin, which
+      makes json.loads throw. We strip it. (This exact byte silently broke
+      two of our own tools before we learned. Keep the strip if you edit.)
+
+USAGE
+    as a hook   : register in settings.json (see README.md)
+    --check P   : dry-run one path, see what the hook would say
+    --selftest  : run the built-in cases, print PASS/FAIL (exit 0/1)
+
+CONFIG (~/.claude/workdir_homes.json)
+    {
+      "nodes":              { "<MACHINE-NAME>": "<canonical project dir>" },
+      "always_ok_prefixes": [ "<dirs where odd cwds are intentional>" ]
+    }
+    Machine names are matched against COMPUTERNAME / hostname, upper-cased.
+    always_ok_prefixes = agent worktrees, scratch dirs, a notes vault —
+    places where a non-canonical cwd is on purpose and must not alarm.
 """
 import json
 import os
@@ -37,27 +50,35 @@ import sys
 
 
 def machine_key() -> str:
+    """This machine's name, upper-cased: COMPUTERNAME on Windows, hostname elsewhere."""
     return (os.environ.get("COMPUTERNAME") or platform.node().split(".")[0] or "").upper()
 
 
 def norm(p: str) -> str:
+    """Normalize a path for comparison: expanduser, collapse separators,
+    drop trailing slashes, case-fold on Windows (its filesystems are
+    case-insensitive; comparing raw strings would miss D:\\Proj vs d:\\proj)."""
     p = os.path.normpath(os.path.expanduser(p)).rstrip("\\/")
     return p.lower() if os.name == "nt" else p
 
 
 def check(cwd: str, cfg: dict, key: str) -> str:
-    """Return a warning line, or '' when everything is fine."""
+    """Core rule. Returns the warning text, or '' when everything is fine.
+
+    Pure function on purpose: no I/O, no env — so it's trivially testable
+    (see selftest below) and you can lift it into your own tooling.
+    """
     nodes = {k.upper(): v for k, v in cfg.get("nodes", {}).items()}
     home = nodes.get(key)
     if not home:
-        return ""  # machine not registered -> stay silent
+        return ""  # machine not registered -> not our business, stay silent
     ncwd, nhome = norm(cwd), norm(home)
     if ncwd == nhome or ncwd.startswith(nhome + os.sep):
-        return ""
+        return ""  # inside the canonical dir -> healthy, silent
     for pref in cfg.get("always_ok_prefixes", []):
         np = norm(pref)
         if ncwd == np or ncwd.startswith(np + os.sep):
-            return ""
+            return ""  # intentional off-project place (worktree, scratch) -> silent
     return (f"[workdir-sentry] WARNING: this session started in '{cwd}', but this "
             f"machine's canonical Claude project dir is '{home}'. Project memory, "
             f"session history and CLAUDE.md are keyed to the working directory, so "
@@ -65,22 +86,51 @@ def check(cwd: str, cfg: dict, key: str) -> str:
             f"session from '{home}' for real work here.")
 
 
+def _load_cfg() -> dict:
+    cfg_path = os.path.join(os.path.expanduser("~"), ".claude", "workdir_homes.json")
+    # utf-8-sig: tolerate a BOM here too (editors on Windows love adding one)
+    with open(cfg_path, "r", encoding="utf-8-sig") as f:
+        return json.load(f)
+
+
+def selftest() -> int:
+    """Built-in cases so you can trust the sentry before wiring it in."""
+    cfg = {"nodes": {"BOX": "D:/proj"}, "always_ok_prefixes": ["D:/ok"]}
+    cases = [
+        ("canonical dir is silent",        check("D:/proj", cfg, "BOX") == ""),
+        ("subdir of canonical is silent",  check("D:/proj/sub/deep", cfg, "BOX") == ""),
+        ("allowed prefix is silent",       check("D:/ok/x", cfg, "BOX") == ""),
+        ("foreign dir warns",              "WARNING" in check("C:/Users/me", cfg, "BOX")),
+        ("unlisted machine is silent",     check("C:/Users/me", cfg, "GHOST") == ""),
+        ("empty config never crashes",     check("C:/anything", {}, "BOX") == ""),
+    ]
+    failed = [name for name, ok in cases if not ok]
+    print("FAIL: " + ", ".join(failed) if failed else "PASS (%d cases)" % len(cases))
+    return 1 if failed else 0
+
+
 def main() -> None:
+    if "--selftest" in sys.argv:
+        sys.exit(selftest())
+    if "--check" in sys.argv:
+        # dry-run one path with the real config: what would the hook say?
+        path = sys.argv[sys.argv.index("--check") + 1]
+        msg = check(path, _load_cfg(), machine_key())
+        print(msg or "(silent — '%s' is fine on %s)" % (path, machine_key()))
+        sys.exit(0)
+    # ---- hook mode: everything below is fail-open by contract ----
     try:
         try:
-            # lstrip BOM: a PowerShell 5.1 pipe prepends U+FEFF and json.loads rejects it
+            # lstrip BOM: PowerShell 5.1 pipes prepend U+FEFF, json.loads rejects it
             payload = json.loads(sys.stdin.read().lstrip("\ufeff"))
         except Exception:
             payload = {}
         cwd = payload.get("cwd") or os.getcwd()
-        cfg_path = os.path.join(os.path.expanduser("~"), ".claude", "workdir_homes.json")
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-        msg = check(cwd, cfg, machine_key())
+        msg = check(cwd, _load_cfg(), machine_key())
         if msg:
             print(msg)
     except BaseException:
-        pass  # a sentry must never break session start
+        pass  # a sentry must never break a session start
     sys.exit(0)
 
 
