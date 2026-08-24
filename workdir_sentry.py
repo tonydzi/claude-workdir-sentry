@@ -32,6 +32,7 @@ SAFETY CONTRACT (read this before adding to your hook chain)
 USAGE
     as a hook   : register in settings.json (see README.md)
     --check P   : dry-run one path, see what the hook would say
+                  (no config yet -> a worded hint, never a traceback)
     --selftest  : run the built-in cases, print PASS/FAIL (exit 0/1)
 
 CONFIG (~/.claude/workdir_homes.json)
@@ -101,6 +102,9 @@ def selftest() -> int:
         ("subdir of canonical is silent",  check("D:/proj/sub/deep", cfg, "BOX") == ""),
         ("allowed prefix is silent",       check("D:/ok/x", cfg, "BOX") == ""),
         ("foreign dir warns",              "WARNING" in check("C:/Users/me", cfg, "BOX")),
+        # the warning must NAME the canonical dir — an alarm that doesn't say
+        # where to go just adds anxiety, not a fix
+        ("warning names the home dir",     "D:/proj" in check("C:/Users/me", cfg, "BOX")),
         ("unlisted machine is silent",     check("C:/Users/me", cfg, "GHOST") == ""),
         ("empty config never crashes",     check("C:/anything", {}, "BOX") == ""),
     ]
@@ -114,8 +118,20 @@ def main() -> None:
         sys.exit(selftest())
     if "--check" in sys.argv:
         # dry-run one path with the real config: what would the hook say?
-        path = sys.argv[sys.argv.index("--check") + 1]
-        msg = check(path, _load_cfg(), machine_key())
+        # Unlike hook mode this talks to a HUMAN, so errors are worded, not silent.
+        idx = sys.argv.index("--check") + 1
+        if idx >= len(sys.argv):
+            sys.exit("usage: workdir_sentry.py --check <path>")
+        path = sys.argv[idx]
+        try:
+            cfg = _load_cfg()
+        except FileNotFoundError:
+            sys.exit("no config yet — create ~/.claude/workdir_homes.json first "
+                     "(copy workdir_homes.example.json from this gist and edit it)")
+        except Exception as e:
+            sys.exit("config exists but can't be read (%s: %s) — "
+                     "fix ~/.claude/workdir_homes.json" % (type(e).__name__, e))
+        msg = check(path, cfg, machine_key())
         print(msg or "(silent — '%s' is fine on %s)" % (path, machine_key()))
         sys.exit(0)
     # ---- hook mode: everything below is fail-open by contract ----
