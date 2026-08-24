@@ -57,10 +57,27 @@ def machine_key() -> str:
 
 def norm(p: str) -> str:
     """Normalize a path for comparison: expanduser, collapse separators,
-    drop trailing slashes, case-fold on Windows (its filesystems are
-    case-insensitive; comparing raw strings would miss D:\\Proj vs d:\\proj)."""
-    p = os.path.normpath(os.path.expanduser(p)).rstrip("\\/")
+    case-fold on Windows (its filesystems are case-insensitive; comparing raw
+    strings would miss D:\\Proj vs d:\\proj).
+
+    NOTE: we deliberately do NOT rstrip separators here. normpath already
+    removes trailing ones, and stripping again turns the filesystem root "/"
+    into "" -- which used to make `startswith(nhome + os.sep)` true for EVERY
+    absolute path and silently disarm the whole sentry. Reported by @JhouCode
+    in anthropics/claude-code#82056.
+    """
+    p = os.path.normpath(os.path.expanduser(p))
     return p.lower() if os.name == "nt" else p
+
+
+def under(child: str, parent: str) -> bool:
+    """True if `child` is `parent` or lives inside it. Component-wise, so
+    "/proj2" is not "inside" "/proj", and a parent of "/" behaves sanely."""
+    if child == parent:
+        return True
+    if not parent.endswith(os.sep):
+        parent += os.sep
+    return child.startswith(parent)
 
 
 def check(cwd: str, cfg: dict, key: str) -> str:
@@ -74,12 +91,30 @@ def check(cwd: str, cfg: dict, key: str) -> str:
     if not home:
         return ""  # machine not registered -> not our business, stay silent
     ncwd, nhome = norm(cwd), norm(home)
-    if ncwd == nhome or ncwd.startswith(nhome + os.sep):
-        return ""  # inside the canonical dir -> healthy, silent
+
+    # Exact match is the ONLY fully healthy case: project memory and session
+    # history are keyed to the EXACT start dir, so `<home>/docs` gets its own
+    # (empty) bucket even though it is "inside the project".
+    if ncwd == nhome:
+        return ""
+
     for pref in cfg.get("always_ok_prefixes", []):
         np = norm(pref)
-        if ncwd == np or ncwd.startswith(np + os.sep):
+        if not np or np == os.sep:
+            continue  # a degenerate prefix ("/", "") would silence everything
+        if under(ncwd, np):
             return ""  # intentional off-project place (worktree, scratch) -> silent
+
+    # A subdir of the canonical dir is a PARTIAL miss, and saying so precisely
+    # matters: CLAUDE.md still loads (it is searched cwd-upward), memory and
+    # history do not (they are keyed to the exact path).
+    if under(ncwd, nhome):
+        return (f"[workdir-sentry] NOTE: this session started in '{cwd}', a subdirectory "
+                f"of this machine's canonical Claude project dir '{home}'. CLAUDE.md still "
+                f"loads (it is searched from the cwd upward), but project memory and session "
+                f"history are keyed to the EXACT start directory, so this session has its own "
+                f"— usually empty — bucket. Restart from '{home}' to reuse the project's memory.")
+
     return (f"[workdir-sentry] WARNING: this session started in '{cwd}', but this "
             f"machine's canonical Claude project dir is '{home}'. Project memory, "
             f"session history and CLAUDE.md are keyed to the working directory, so "
@@ -99,8 +134,21 @@ def selftest() -> int:
     cfg = {"nodes": {"BOX": "D:/proj"}, "always_ok_prefixes": ["D:/ok"]}
     cases = [
         ("canonical dir is silent",        check("D:/proj", cfg, "BOX") == ""),
-        ("subdir of canonical is silent",  check("D:/proj/sub/deep", cfg, "BOX") == ""),
+        # A subdir is NOT silent: memory/history are keyed to the exact start
+        # dir, so it gets its own empty bucket. The old selftest asserted the
+        # opposite and locked the bug in for a month.
+        ("subdir of canonical is flagged", "NOTE" in check("D:/proj/sub/deep", cfg, "BOX")),
+        ("subdir note says CLAUDE.md still loads",
+         "CLAUDE.md still" in check("D:/proj/sub/deep", cfg, "BOX")),
+        ("sibling dir is not 'inside'",    "WARNING" in check("D:/proj2", cfg, "BOX")),
         ("allowed prefix is silent",       check("D:/ok/x", cfg, "BOX") == ""),
+        # root-as-home must NOT swallow every absolute path
+        ("root home still flags a foreign dir",
+         check("/etc", {"nodes": {"BOX": "/"}}, "BOX") != ""),
+        ("root home is silent at root itself",
+         check("/", {"nodes": {"BOX": "/"}}, "BOX") == ""),
+        ("a '/' always_ok_prefix does not disarm",
+         check("/etc", {"nodes": {"BOX": "/proj"}, "always_ok_prefixes": ["/"]}, "BOX") != ""),
         ("foreign dir warns",              "WARNING" in check("C:/Users/me", cfg, "BOX")),
         # the warning must NAME the canonical dir — an alarm that doesn't say
         # where to go just adds anxiety, not a fix

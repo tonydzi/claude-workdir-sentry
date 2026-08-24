@@ -28,6 +28,20 @@ We audited one long-running workstation (a machine in a 6-node Claude Code fleet
 
 **More than half of all sessions ran without their project context** — and nobody noticed for months, because nothing ever complains.
 
+> **Read the denominator before you quote this number.** `~/.claude/projects/<slug>/` also
+> contains `subagents/*.jsonl` — subagent transcripts, marked `"isSidechain": true`. They never
+> open a memory store and never fire `SessionStart`, so counting `**/*.jsonl` measures the wrong
+> population (thanks to [@JhouCode](https://github.com/anthropics/claude-code/issues/82056) for
+> catching this). Count `<slug>/*.jsonl` only.
+>
+> The bias does **not** have a fixed direction. Re-measuring one node of our fleet with the filter
+> named: 1797 real sessions vs 613 subagent transcripts; **63.1%** of real sessions keyed to an
+> empty store, but only **47.3%** if you count recursively — because 606 of those 613 subagent
+> transcripts sit under the one slug that *does* have a store. A subagent inherits its parent's
+> project, and parents are the healthy projects, so the passenger is systematically healthy and
+> drags the rate *down*. Whether it inflates or deflates depends on which sessions spawn subagents
+> on your box. Name your filter; don't assume its sign.
+
 ### Quick self-diagnosis (30 seconds)
 
 Look at `~/.claude/projects/` — every directory name encodes a start-cwd. If you see a fat `C--Users-<you>` or `C--Windows-System32` next to your real project dir, you have this problem.
@@ -42,7 +56,12 @@ So the *model itself* knows it's homeless and tells you on turn one — instead 
 
 Design choices, so you can trust it in your hook chain:
 
-- **Silent when healthy.** Right folder, allowed folder, or unlisted machine → prints nothing.
+- **Silent when healthy.** Exact canonical folder, allowed prefix, or unlisted machine → prints nothing.
+  A *subdirectory* of the canonical dir gets a softer `NOTE`, not silence: CLAUDE.md still loads
+  (it is searched cwd-upward) but memory and history are keyed to the **exact** start dir, so a
+  subdir has its own empty bucket. Earlier versions stayed silent there — and the selftest asserted
+  that silence, which is how the bug survived. Both this and the `"/"`-as-canonical-dir disarm were
+  reported by [@JhouCode](https://github.com/anthropics/claude-code/issues/82056).
 - **Fail-open.** Any error (missing config, broken JSON, weird stdin) → silence and exit 0. A watchdog must never block a session start.
 - **Zero dependencies.** Stdlib Python 3, one file, ~40 effective lines.
 - **BOM-hardened.** PowerShell 5.1 pipes prepend a UTF-8 BOM to stdin; the hook strips it before parsing (this exact BOM broke two of our own tools before we learned).
