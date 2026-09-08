@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use claude-workdir-sentry in research or software, please cite it as below."
+title: "claude-workdir-sentry"
+type: software
+authors:
+  - family-names: Dziatkovskii
+    given-names: Anton
+    orcid: "https://orcid.org/0000-0001-7408-3054"
+    affiliation: "Palo Alto AI Research Lab"
+repository-code: "https://github.com/tonydzi/claude-workdir-sentry"
+url: "https://github.com/tonydzi/claude-workdir-sentry"
+abstract: >-
+  A SessionStart hook for Claude Code that warns, in the model's own context, when a
+  session starts outside the machine's canonical project directory - the failure mode
+  where project memory, session history and CLAUDE.md silently never load. Stdlib
+  Python 3, one file, fail-open. Free, MIT.
