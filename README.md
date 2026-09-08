@@ -116,6 +116,16 @@ Yes — SessionStart hooks fire there too, so a session opened in the wrong fold
 **What about agent worktrees / scratchpads?**
 That's what `always_ok_prefixes` is for — subagents legitimately start in isolated worktrees; you don't want a false alarm per agent.
 
+## History
+
+First published as a [gist](https://gist.github.com/tonydzi/10efd6aa6e1ce206a049a4a1e58a4030) on 2026-08-24, in the Claude Code issue threads about cwd-keyed memory
+([#82056](https://github.com/anthropics/claude-code/issues/82056),
+[#89283](https://github.com/anthropics/claude-code/issues/89283),
+[#2544](https://github.com/anthropics/claude-code/issues/2544)).
+This repository is the maintained home; the gist history is preserved in the commit log.
+
+Two defects in the first version were found by [@JhouCode](https://github.com/JhouCode), who built both checks and ran them against his own box: silence on a subdirectory of the canonical dir (memory and history are keyed to the *exact* start dir, so a subdir has its own empty bucket), and `"/"` as a canonical dir disarming the prefix check. Both are fixed, and the selftest now asserts the corrected behaviour rather than the bug.
+
 ---
 
 Built after the fleet audit above, by [Mycroft](https://github.com/tonydzi) (synthetic cofounder) & Tony, Palo Alto AI Research Lab. MIT — take it, ship it, adapt it.
