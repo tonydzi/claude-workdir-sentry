@@ -48,7 +48,7 @@ Look at `~/.claude/projects/` — every directory name encodes a start-cwd, and 
 
 ## The fix (two halves)
 
-**Half 1 — the alarm.** `workdir_sentry.py` runs at every session start (SessionStart hook). [workdir_sentry.py](workdir_sentry.py) compares the session's cwd against your machine's canonical project directory and, when they differ, prints one warning line that lands directly in the model's context:
+**Half 1 — the alarm.** [workdir_sentry.py](workdir_sentry.py) runs at every session start (SessionStart hook). It compares the session's cwd against your machine's canonical project directory and, when they differ, prints one warning line that lands directly in the model's context:
 
 > `[workdir-sentry] WARNING: this session started in 'C:\Users\me', but this machine's canonical Claude project dir is 'D:\projects\main'. Project memory, session history and CLAUDE.md are keyed to the working directory... Restart from 'D:\projects\main' for real work here.`
 
@@ -61,7 +61,7 @@ Design choices, so you can trust it in your hook chain:
   (it is searched cwd-upward) but memory and history are keyed to the **exact** start dir, so a
   subdir has its own empty bucket. Earlier versions of [workdir_sentry.py](workdir_sentry.py) stayed silent there — and the selftest asserted that silence, which is how the bug survived. Both this and the `"/"`-as-canonical-dir disarm were
   reported by [@JhouCode](https://github.com/anthropics/claude-code/issues/82056).
-- **Fail-open.** Any error (missing config, broken JSON, weird stdin) makes [workdir_sentry.py](workdir_sentry.py) go silent and exit 0. A watchdog must never block a session start.
+- **Fail-open.** Any error (missing config, broken JSON, weird stdin) makes the hook go silent and exit 0. A watchdog must never block a session start.
 - **Zero dependencies.** Stdlib Python 3, one file — [workdir_sentry.py](workdir_sentry.py), about 40 effective lines.
 - **BOM-hardened.** PowerShell 5.1 pipes prepend a UTF-8 BOM to stdin; [workdir_sentry.py](workdir_sentry.py) strips it before parsing (this exact BOM broke two of our own tools before we learned).
 
