@@ -10,7 +10,7 @@ Claude Code keys three things to the directory a session **starts in**:
 2. **Session history** — same per-directory bucket
 3. **Your project `CLAUDE.md`** — loaded from the cwd upward
 
-Start a session in the wrong folder and none of that loads. No error, no warning — Claude just quietly behaves like it has amnesia. You've probably seen the symptoms without knowing the cause:
+Start a session in the wrong folder and none of that loads, which is the one thing [workdir_sentry.py](workdir_sentry.py) watches for. No error, no warning — Claude just quietly behaves like it has amnesia. You've probably seen the symptoms without knowing the cause:
 
 - *"Claude ignores my CLAUDE.md rules"* — sometimes the file was never in context at all
 - *"My chat history / memory disappeared"* — it's sitting in a different project bucket
@@ -26,7 +26,7 @@ We audited one long-running workstation (a machine in a 6-node Claude Code fleet
 | `C:\Windows\System32` (elevated shells, scheduled tasks) | 2 420 |
 | The actual project folder | 1 921 |
 
-**More than half of all sessions ran without their project context** — and nobody noticed for months, because nothing ever complains.
+**More than half of all sessions ran without their project context** — and through 2026 nobody noticed for months, because nothing ever complains.
 
 > **Read the denominator before you quote this number.** `~/.claude/projects/<slug>/` also
 > contains `subagents/*.jsonl` — subagent transcripts, marked `"isSidechain": true`. They never
@@ -44,27 +44,26 @@ We audited one long-running workstation (a machine in a 6-node Claude Code fleet
 
 ### Quick self-diagnosis (30 seconds)
 
-Look at `~/.claude/projects/` — every directory name encodes a start-cwd. If you see a fat `C--Users-<you>` or `C--Windows-System32` next to your real project dir, you have this problem.
+Look at `~/.claude/projects/` — every directory name encodes a start-cwd, and [workdir_sentry.py](workdir_sentry.py) reads the same encoding. If you see a fat `C--Users-<you>` or `C--Windows-System32` next to your real project dir, you have this problem.
 
 ## The fix (two halves)
 
-**Half 1 — the alarm.** `workdir_sentry.py` runs at every session start (SessionStart hook). It compares the session's cwd against your machine's canonical project directory and, when they differ, prints one warning line that lands directly in the model's context:
+**Half 1 — the alarm.** `workdir_sentry.py` runs at every session start (SessionStart hook). [workdir_sentry.py](workdir_sentry.py) compares the session's cwd against your machine's canonical project directory and, when they differ, prints one warning line that lands directly in the model's context:
 
 > `[workdir-sentry] WARNING: this session started in 'C:\Users\me', but this machine's canonical Claude project dir is 'D:\projects\main'. Project memory, session history and CLAUDE.md are keyed to the working directory... Restart from 'D:\projects\main' for real work here.`
 
-So the *model itself* knows it's homeless and tells you on turn one — instead of you discovering it a week later.
+So the *model itself* knows it's homeless and tells you on turn one — instead of you discovering it a week later, which is the entire return on [workdir_sentry.py](workdir_sentry.py).
 
 Design choices, so you can trust it in your hook chain:
 
-- **Silent when healthy.** Exact canonical folder, allowed prefix, or unlisted machine → prints nothing.
+- **Silent when healthy.** Exact canonical folder, allowed prefix from [workdir_homes.example.json](workdir_homes.example.json), or unlisted machine → prints nothing.
   A *subdirectory* of the canonical dir gets a softer `NOTE`, not silence: CLAUDE.md still loads
   (it is searched cwd-upward) but memory and history are keyed to the **exact** start dir, so a
-  subdir has its own empty bucket. Earlier versions stayed silent there — and the selftest asserted
-  that silence, which is how the bug survived. Both this and the `"/"`-as-canonical-dir disarm were
+  subdir has its own empty bucket. Earlier versions of [workdir_sentry.py](workdir_sentry.py) stayed silent there — and the selftest asserted that silence, which is how the bug survived. Both this and the `"/"`-as-canonical-dir disarm were
   reported by [@JhouCode](https://github.com/anthropics/claude-code/issues/82056).
-- **Fail-open.** Any error (missing config, broken JSON, weird stdin) → silence and exit 0. A watchdog must never block a session start.
-- **Zero dependencies.** Stdlib Python 3, one file, ~40 effective lines.
-- **BOM-hardened.** PowerShell 5.1 pipes prepend a UTF-8 BOM to stdin; the hook strips it before parsing (this exact BOM broke two of our own tools before we learned).
+- **Fail-open.** Any error (missing config, broken JSON, weird stdin) makes [workdir_sentry.py](workdir_sentry.py) go silent and exit 0. A watchdog must never block a session start.
+- **Zero dependencies.** Stdlib Python 3, one file — [workdir_sentry.py](workdir_sentry.py), about 40 effective lines.
+- **BOM-hardened.** PowerShell 5.1 pipes prepend a UTF-8 BOM to stdin; [workdir_sentry.py](workdir_sentry.py) strips it before parsing (this exact BOM broke two of our own tools before we learned).
 
 **Half 2 — the entry.** The alarm tells you you're lost; fixing the *door* stops you getting lost. Point your terminal's default start directory at the project:
 
@@ -72,7 +71,7 @@ Design choices, so you can trust it in your hook chain:
 - **macOS Terminal:** Settings → Profiles → your profile → "Working directory: Other"
 - **iTerm2:** Profiles → General → Working Directory → "Directory"
 
-In our audit, the 4 370 home-dir sessions existed purely because that's where a fresh terminal tab opens.
+In our own 2026 audit, the 4 370 home-dir sessions existed purely because that's where a fresh terminal tab opens.
 
 ## Install (2 minutes)
 
@@ -100,21 +99,21 @@ On Windows use `python "%USERPROFILE%\\.claude\\hooks\\workdir_sentry.py"`.
 python3 ~/.claude/hooks/workdir_sentry.py --selftest
 ```
 
-`--selftest` runs the built-in cases (wrong dir warns, right dir is silent, allowed prefix is silent, unlisted machine is silent, broken config never crashes) and prints `PASS` or what failed. You can also try a single path by hand: `--check /some/path`.
+`--selftest` runs the built-in cases (wrong dir warns, right dir is silent, allowed prefix is silent, unlisted machine is silent, broken config never crashes) and prints `PASS` or what failed. You can also try a single path by hand against [workdir_sentry.py](workdir_sentry.py): `--check /some/path`.
 
 ## FAQ
 
-**Why a per-machine config file instead of hardcoding a path?**
+**Why a per-machine config file like [workdir_homes.example.json](workdir_homes.example.json) instead of hardcoding a path?**
 The config syncs fine across machines (each machine only reads its own entry), while the *hook registration* lives in per-machine `settings.json`. If you run one machine, one entry is all you need.
 
 **Why warn instead of auto-cd or blocking?**
-A session's cwd can't be changed retroactively by a hook, and blocking would break intentional off-project sessions (quick questions, scratch work). One honest line in the model's context is the right amount of force — the model relays it and you decide.
+A session's cwd can't be changed retroactively by a hook, so [workdir_sentry.py](workdir_sentry.py) only warns; blocking would break intentional off-project sessions (quick questions, scratch work). One honest line in the model's context is the right amount of force — the model relays it and you decide.
 
 **Does this work in the Desktop app?**
 Yes — SessionStart hooks fire there too, so a session opened in the wrong folder via the folder picker gets the same first-turn warning.
 
 **What about agent worktrees / scratchpads?**
-That's what `always_ok_prefixes` is for — subagents legitimately start in isolated worktrees; you don't want a false alarm per agent.
+That's what the `always_ok_prefixes` list in [workdir_homes.example.json](workdir_homes.example.json) is for — subagents legitimately start in isolated worktrees; you don't want a false alarm per agent.
 
 ## History
 
@@ -128,4 +127,4 @@ Two defects in the first version were found by [@JhouCode](https://github.com/Jh
 
 ---
 
-Built after the fleet audit above, by [Mycroft](https://github.com/tonydzi) (synthetic cofounder) & Tony, Palo Alto AI Research Lab. MIT — take it, ship it, adapt it.
+Built after the fleet audit above, by [Mycroft](https://github.com/tonydzi) (synthetic cofounder) & Tony, Palo Alto AI Research Lab. [MIT](LICENSE) — take it, ship it, adapt it; cite it via [CITATION.cff](CITATION.cff), and if you are an agent start at [FOR-ROBOTS.md](FOR-ROBOTS.md).
