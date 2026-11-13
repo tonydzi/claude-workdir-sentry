@@ -1,4 +1,71 @@
-# Claude Code workdir sentry
+# claude-workdir-sentry
+
+A tiny Claude Code add-on that warns you when you start a session in the wrong folder, so Claude does not quietly lose your project memory and CLAUDE.md.
+
+**Who it's for:** Claude Code users who open sessions from a terminal, a scheduled task or the desktop app and sometimes land in the home folder.
+**What you get:** one warning line on the first turn of a wrong-folder session, and total silence when you are in the right folder.
+
+## Quick start
+1. Save `workdir_sentry.py` to `~/.claude/hooks/`.
+2. Copy `workdir_homes.example.json` to `~/.claude/workdir_homes.json` and put your machine name and your main project folder in it.
+3. Add the hook to `~/.claude/settings.json` (exact snippet is in "For AI agents" below).
+4. Run `python workdir_sentry.py --selftest`.
+
+**Done when:** the self-test prints `PASS`, and a session started in your home folder shows a `[workdir-sentry] WARNING` line.
+
+> Want an AI agent to do it for you? Paste this to Claude Code / Codex / Cursor:
+> "Read the 'For AI agents' section of https://github.com/tonydzi/claude-workdir-sentry and set it up for me."
+
+## For AI agents
+
+### Preconditions
+- Python 3 (stdlib only). On Windows the command is `python`; on macOS and Linux use `python3`.
+- Claude Code with hooks enabled (`~/.claude/settings.json`).
+- Ask the human: their main project folder (absolute path), and which folders are on purpose outside it (scratch dirs, worktrees, a notes vault).
+- Get the machine name with `python -c "import os,platform;print((os.environ.get('COMPUTERNAME') or platform.node().split('.')[0]).upper())"`.
+
+### Install
+```bash
+git clone https://github.com/tonydzi/claude-workdir-sentry
+mkdir -p ~/.claude/hooks
+cp claude-workdir-sentry/workdir_sentry.py ~/.claude/hooks/workdir_sentry.py
+cp claude-workdir-sentry/workdir_homes.example.json ~/.claude/workdir_homes.json
+```
+Then merge this into `~/.claude/settings.json` (keep existing hooks; add, do not replace):
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command",
+          "command": "python3 \"$HOME/.claude/hooks/workdir_sentry.py\"",
+          "timeout": 10 } ] }
+    ]
+  }
+}
+```
+On Windows use `python "%USERPROFILE%\\.claude\\hooks\\workdir_sentry.py"` as the command.
+
+### Configure
+Edit `~/.claude/workdir_homes.json`:
+- `nodes`: replace the example entries with `"<MACHINE-NAME-UPPERCASE>": "<project dir>"`. Both values come from the human and the machine-name command above. A machine not listed means the hook stays silent.
+- `always_ok_prefixes`: folders where starting a session is fine (from the human).
+
+### Verify
+```bash
+python3 ~/.claude/hooks/workdir_sentry.py --selftest
+```
+Expected: prints `PASS (12 cases)` and exits 0 (case count may differ in newer versions; `PASS` is what matters).
+Optional dry run: `python3 ~/.claude/hooks/workdir_sentry.py --check <some-path>` shows what the hook would say for that path.
+
+### Uninstall / rollback
+Remove the `SessionStart` entry from `~/.claude/settings.json`, then `rm ~/.claude/hooks/workdir_sentry.py ~/.claude/workdir_homes.json`. Keep a copy of `settings.json` before editing.
+
+### Rules for the agent
+- Back up `~/.claude/settings.json` before editing and preserve all other hooks.
+- Never invent the project folder or machine name; ask the human.
+- The hook only warns. Do not change the human's terminal or working directory settings without asking.
+
+## Details
 
 **One tiny SessionStart hook that tells Claude (and you) when a session started in the wrong folder — before you lose a day of context.**
 
