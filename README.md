@@ -9,9 +9,9 @@ A tiny Claude Code add-on that warns you when you start a session in the wrong f
 1. Save `workdir_sentry.py` to `~/.claude/hooks/`.
 2. Copy `workdir_homes.example.json` to `~/.claude/workdir_homes.json` and put your machine name and your main project folder in it.
 3. Add the hook to `~/.claude/settings.json` (exact snippet is in "For AI agents" below).
-4. Run `python workdir_sentry.py --selftest`.
+4. Run the self-test from the folder where the file now lives (`~/.claude/hooks`): `python workdir_sentry.py --selftest`. Then check your own config: `python workdir_sentry.py --check <your home folder>`.
 
-**Done when:** the self-test prints `PASS`, and a session started in your home folder shows a `[workdir-sentry] WARNING` line.
+**Done when:** the self-test prints `PASS`, and `--check` on your home folder prints a `[workdir-sentry] WARNING` line naming your project folder, while `--check` on the project folder itself prints `(silent`. If the home folder check is silent, your machine name is not in `workdir_homes.json` yet (the example file ships with fake machine names, so the hook stays silent until you edit it).
 
 > Want an AI agent to do it for you? Paste this to Claude Code / Codex / Cursor:
 > "Read the 'For AI agents' section of https://github.com/tonydzi/claude-workdir-sentry and set it up for me."
@@ -31,6 +31,14 @@ mkdir -p ~/.claude/hooks
 cp claude-workdir-sentry/workdir_sentry.py ~/.claude/hooks/workdir_sentry.py
 cp claude-workdir-sentry/workdir_homes.example.json ~/.claude/workdir_homes.json
 ```
+Windows PowerShell form:
+```powershell
+git clone https://github.com/tonydzi/claude-workdir-sentry
+New-Item -ItemType Directory -Force "$HOME\.claude\hooks" | Out-Null
+Copy-Item claude-workdir-sentry\workdir_sentry.py "$HOME\.claude\hooks\workdir_sentry.py"
+Copy-Item claude-workdir-sentry\workdir_homes.example.json "$HOME\.claude\workdir_homes.json"
+```
+The copied `workdir_homes.json` still holds the example machine names (`MY-DESKTOP`, `MY-MACBOOK`), so the hook stays silent until you do the Configure step. Do that before Verify.
 Then merge this into `~/.claude/settings.json` (keep existing hooks; add, do not replace):
 ```json
 {
@@ -53,12 +61,15 @@ Edit `~/.claude/workdir_homes.json`:
 ### Verify
 ```bash
 python3 ~/.claude/hooks/workdir_sentry.py --selftest
+python3 ~/.claude/hooks/workdir_sentry.py --check "$HOME"
+python3 ~/.claude/hooks/workdir_sentry.py --check "<the project folder from workdir_homes.json>"
 ```
-Expected: prints `PASS (12 cases)` and exits 0 (case count may differ in newer versions; `PASS` is what matters).
-Optional dry run: `python3 ~/.claude/hooks/workdir_sentry.py --check <some-path>` shows what the hook would say for that path.
+(PowerShell: `python "$HOME\.claude\hooks\workdir_sentry.py" ...`; `~` is not expanded there.)
+
+Expected: `--selftest` prints `PASS (12 cases)` and exits 0 (case count may differ in newer versions; `PASS` is what matters). The self-test uses a built-in fake config, so it proves only that the script works, NOT that your install or config is right. The real check is the two `--check` runs: the home folder must print a `[workdir-sentry] WARNING` line that names the project folder, and the project folder must print `(silent`. A silent home-folder check means this machine name is missing from `nodes` (or the home folder is listed in `always_ok_prefixes`), so the hook would never warn. `--check` reads the config but does not prove the `settings.json` hook entry is wired; for that, start a new session in the home folder and look for the warning on the first turn.
 
 ### Uninstall / rollback
-Remove the `SessionStart` entry from `~/.claude/settings.json`, then `rm ~/.claude/hooks/workdir_sentry.py ~/.claude/workdir_homes.json`. Keep a copy of `settings.json` before editing.
+Remove the `SessionStart` entry from `~/.claude/settings.json`, then `rm ~/.claude/hooks/workdir_sentry.py ~/.claude/workdir_homes.json` (PowerShell: `Remove-Item "$HOME\.claude\hooks\workdir_sentry.py","$HOME\.claude\workdir_homes.json"`). Keep a copy of `settings.json` before editing.
 
 ### Rules for the agent
 - Back up `~/.claude/settings.json` before editing and preserve all other hooks.
